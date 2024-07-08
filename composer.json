@@ -1,0 +1,7 @@
+{
+    "require": {
+        "simple-html-dom/simple-html-dom": "^1.5",
+        "php-webdriver/webdriver": "^1.15",
+        "league/csv": "^9.0"
+    }
+}
