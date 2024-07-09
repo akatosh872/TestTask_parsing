@@ -22,9 +22,14 @@ try {
     // Open providers page
     $driver->get(BASE_URL . '/en/Providers');
 
-    $driver->wait()->until(
-        WebDriverExpectedCondition::presenceOfAllElementsLocatedBy(WebDriverBy::cssSelector('.providerCard'))
-    );
+    // Wait for the page to load and check if the page is available
+    try {
+        $driver->wait()->until(
+            WebDriverExpectedCondition::presenceOfAllElementsLocatedBy(WebDriverBy::cssSelector('.providerCard'))
+        );
+    } catch (WebDriverException $e) {
+        throw new Exception('Unable to load the providers page.');
+    }
 
     // Array to store providers data
     $providersData = [];
@@ -60,82 +65,107 @@ try {
         } else {
             break; // No more pages found
         }
-
     }
 
-    // Process data for each provider
+    // Quit the driver session
+    $driver->quit();
+
+    // Process data for each provider using cURL and DOM
+    echo "Parsed data from each provider. This may take a long time, do not turn off the script";
+
     foreach ($providersData as &$provider) {
-        $driver->get($provider['link']);
+        $html = fetchHtml($provider['link']);
 
-        $provider['founded'] = getElementText($driver, '//td[@data-label="Founded"]', 'Unknown founded year');
-        $provider['website'] = getElementAttribute($driver, '//td[@data-label="Website"]/a', 'href', 'No website');
-        $provider['totalGames'] = getElementText($driver, '//td[@data-label="Total Games"]', '0');
-        $provider['videoSlots'] = getElementText($driver, '//td[@data-label="Video Slots"]', '0');
-        $provider['classicSlots'] = getElementText($driver, '//td[@data-label="Classic Slots"]', '0');
-        $provider['cardGames'] = getElementText($driver, '//td[@data-label="Card games"]', '0');
-        $provider['rouletteGames'] = getElementText($driver, '//td[@data-label="Roulette Games"]', '0');
-        $provider['liveCasinoGames'] = getElementText($driver, '//td[@data-label="Live Casino Games"]', '0');
-        $provider['scratchTickets'] = getElementText($driver, '//td[@data-label="Scratch tickets"]', '0');
-        $provider['otherTypes'] = getElementText($driver, '//td[@data-label="Other types"]', '0');
-        $provider['casinos'] = getElementText($driver, '//div[@class="provider_prop_item"]//p[@class="prop_number"]', '0');
+        if (empty($html)) {
+            throw new Exception('Failed to fetch HTML content for ' . $provider['link']);
+        }
 
+        // Create DOMDocument and DOMXPath objects
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+        $xpath = new DOMXPath($dom);
+
+        $provider['founded'] = getElementText($xpath, '//td[@data-label="Founded"]', 'Unknown founded year');
+        $provider['website'] = getElementAttribute($xpath, '//td[@data-label="Website"]/a', 'href', 'No website');
+        $provider['totalGames'] = getElementText($xpath, '//td[@data-label="Total Games"]', '0');
+        $provider['videoSlots'] = getElementText($xpath, '//td[@data-label="Video Slots"]', '0');
+        $provider['classicSlots'] = getElementText($xpath, '//td[@data-label="Classic Slots"]', '0');
+        $provider['cardGames'] = getElementText($xpath, '//td[@data-label="Card games"]', '0');
+        $provider['rouletteGames'] = getElementText($xpath, '//td[@data-label="Roulette Games"]', '0');
+        $provider['liveCasinoGames'] = getElementText($xpath, '//td[@data-label="Live Casino Games"]', '0');
+        $provider['scratchTickets'] = getElementText($xpath, '//td[@data-label="Scratch tickets"]', '0');
+        $provider['otherTypes'] = getElementText($xpath, '//td[@data-label="Other types"]', '0');
+        $provider['casinos'] = getElementText($xpath, '//div[@class="provider_prop_item"]//p[@class="prop_number"]', '0');
 
         // Parse countries
-        $countries = $driver->findElements(WebDriverBy::xpath('//div[@class="sixTableStat"]//tbody//tr//td[@data-label="Country"]/a[@class="linkOneLine"]'));
-        if (count($countries) > 0) {
+        $countries = $xpath->query('//div[@class="sixTableStat"]//tbody//tr//td[@data-label="Country"]/a[@class="linkOneLine"]');
+        if ($countries->length > 0) {
             $provider['countries'] = implode(';', array_map(function ($country) {
-                return $country->getText();
-            }, $countries));
+                return $country->textContent;
+            }, iterator_to_array($countries)));
         } else {
             $provider['countries'] = 'No country data';
         }
-        file_put_contents(__DIR__ . '/text.txt', '<pre>' . print_r([$provider], 1), 8);
     }
 
     // Write data to CSV
     writeCsv($providersData, CSV_FILE_PATH);
 
-} catch (WebDriverException | Exception $e) {
+} catch (Exception $e) {
     echo "Error: " . $e->getMessage();
-} finally {
-    // Quit the driver session
-    if (isset($driver)) {
-        $driver->quit();
-    }
 }
 
 /**
- * Get the text of an element located by xpath.
+ * Function to fetch HTML using curl
  *
- * @param RemoteWebDriver $driver
- * @param string $xpath
+ * @param $url
+ * @return string
+ */
+function fetchHtml($url): string
+{
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $html = curl_exec($ch);
+    if (curl_errno($ch)) {
+        curl_close($ch);
+        return '';
+    }
+    curl_close($ch);
+    return $html;
+}
+
+/**
+ * Function parse and get element text using XPath
+ *
+ * @param $xpath
+ * @param $query
  * @param string $default
  * @return string
  */
-function getElementText(RemoteWebDriver $driver, string $xpath, string $default = ''): string
+function getElementText($xpath, $query, string $default = ''): string
 {
-    $elements = $driver->findElements(WebDriverBy::xpath($xpath));
-    if (count($elements) > 0) {
-        return $elements[0]->getText() ?? $default;
+    $elements = $xpath->query($query);
+    if ($elements->length > 0) {
+        return $elements->item(0)->textContent;
     } else {
         return $default;
     }
 }
 
 /**
- * Get the attribute of an element located by xpath.
+ * Parse and get element attribute using XPath
  *
- * @param RemoteWebDriver $driver
- * @param string $xpath
- * @param string $attribute
+ * @param $xpath
+ * @param $query
+ * @param $attribute
  * @param string $default
  * @return string
  */
-function getElementAttribute(RemoteWebDriver $driver, string $xpath, string $attribute, string $default): string
+function getElementAttribute($xpath, $query, $attribute, string $default = ''): string
 {
-    $elements = $driver->findElements(WebDriverBy::xpath($xpath));
-    if (count($elements) > 0) {
-        return $elements[0]->getAttribute($attribute);
+    $elements = $xpath->query($query);
+    if ($elements->length > 0) {
+        return $elements->item(0)->getAttribute($attribute) ?? $default;
     } else {
         return $default;
     }
@@ -165,8 +195,12 @@ function findElementOrFalse(RemoteWebDriver $driver, WebDriverBy $by)
  * @throws \League\Csv\CannotInsertRecord
  * @throws \League\Csv\Exception
  */
-function writeCsv(array $data, string $filePath)
+function writeCsv(array $data, string $filePath): void
 {
+    if (empty($data)) {
+        throw new Exception('No data available to write to CSV.');
+    }
+
     $csv = Writer::createFromPath($filePath, 'w+');
     $csv->setOutputBOM(ByteSequence::BOM_UTF8); // Ensure UTF-8 BOM
     $csv->setDelimiter(';'); // set delimiter
